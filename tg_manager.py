@@ -13,7 +13,7 @@ PROPERTIES_FILE = os.path.join(BASE_DIR, "server.properties")
 WORLDS_DIR = os.path.join(BASE_DIR, "worlds")
 CONFIG_FILE = os.path.join(BASE_DIR, "shop_config.json")
 
-# Default Merchant Catalog: Basic Building/Food enabled, Rare items locked
+# Default Merchant Catalog
 DEFAULT_SHOP = {
     "food": {
         "bread": {"enabled": True, "currency": "emerald", "price": 1, "count": 8},
@@ -151,11 +151,11 @@ Security & Protection:
 /antixray <on|off> - Force server texture enforcement
 
 Custom Merchant Control:
+/spawnmerchant <player> - Player ke paas Merchant NPC spawn karein
 /shop - List all merchant categories & prices
 /shopset <item> <on|off> - Allow/Block item in shop
 /customprice <item> <currency> <amount> <count>
    Example: /customprice elytra diamond 128 1 (2 stacks diamond)
-/spawnmerchant - Summon Merchant NPC at console location
 /processbuy <player> <item> - Secure trade transaction
 
 Game Rules & Gameplay:
@@ -243,7 +243,7 @@ def handle_updates():
                         send_to_console("scoreboard objectives add chestprotect dummy")
                         send_message("Chest Protection ENABLED! Containers protected.")
                     else:
-                        send_message("Chest Protection DISABLED! Open chest interactions allowed.")
+                        send_message("Chest Protection DISABLED!")
 
                 # Force Texturepack Requirement (Anti-Xray)
                 elif text.startswith("/antixray "):
@@ -319,9 +319,17 @@ def handle_updates():
                         else:
                             send_message(f"Item '{item_name}' disabled ya unavailable hai.")
 
-                elif text == "/spawnmerchant":
-                    send_to_console("summon npc ~ ~ ~")
-                    send_message("Merchant NPC spawn ho gaya!")
+                # Merchant Spawn at Player or World Center
+                elif text.startswith("/spawnmerchant"):
+                    parts = text.split(maxsplit=1)
+                    if len(parts) > 1:
+                        target_player = parts[1].strip()
+                        send_to_console(f'execute as "{target_player}" at @s run summon npc ~ ~ ~ "Server Merchant"')
+                        send_message(f"Merchant NPC successfully '{target_player}' ke exact coordinates par spawn ho gaya!")
+                    else:
+                        # Fallback to nearest player or world spawn center
+                        send_to_console('execute as @p at @s run summon npc ~ ~ ~ "Server Merchant"')
+                        send_message("Merchant NPC online player / spawn position par spawn ho gaya!\nAap kisi specific player ke paas bulane ke liye '/spawnmerchant <player_name>' bhi use kar sakte hain.")
 
                 # Network Tunnel Fix
                 elif text == "/fixtunnel":

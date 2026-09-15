@@ -38,7 +38,7 @@ $CLAIM_URL
 Protocol: Minecraft Bedrock (UDP)
 Port: 19132
 
-Claim karne ke baad is bot ko 'done' likhein."
+Claim karne ke baad bot ko 'done' likhkar bhejein."
     else
         send_tg "Playit tunnel check/claimed. Server setup continuing..."
     fi
@@ -75,7 +75,7 @@ Claim karne ke baad is bot ko 'done' likhein."
     unzip -o -q bedrock-server.zip
     chmod +x bedrock_server
 
-    # Base Security Hardening: Anti-Xray, Default Member permissions, Cheats Enabled for Admin Engine
+    # Base Security: Anti-Xray, Default Member (No Cheats for users), Anti-Speedhack
     sed -i 's/allow-list=true/allow-list=false/g' server.properties
     sed -i 's/white-list=true/white-list=false/g' server.properties
     sed -i 's/allow-cheats=false/allow-cheats=true/g' server.properties
@@ -84,12 +84,12 @@ Claim karne ke baad is bot ko 'done' likhein."
     sed -i 's/texturepack-required=false/texturepack-required=true/g' server.properties
     sed -i 's/correct-player-movement=false/correct-player-movement=true/g' server.properties
 
-    # Start screens
+    # Start background screen sessions
     screen -dmS playit-tunnel /usr/local/bin/playit-cli
     screen -dmS mcpe bash -c "LD_LIBRARY_PATH=. ./bedrock_server"
     screen -dmS tg-bot python3 /root/tg_manager.py
 
-    send_tg "Server Active! Full Security Enforced (Anti-Xray: ON, Cheats: Locked to Member). Type /help sabhi controls ke liye."
+    send_tg "Minecraft Bedrock Server & Telegram Manager active! Full security rules enforced. Telegram par /help type karein."
 ) &
 
 tail -f /dev/null

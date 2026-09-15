@@ -75,7 +75,7 @@ Claim karne ke baad bot ko 'done' likhkar bhejein."
     unzip -o -q bedrock-server.zip
     chmod +x bedrock_server
 
-    # Base Security: Anti-Xray, Default Member (No Cheats for users), Anti-Speedhack
+    # Security Rules Enforced: Anti-Xray ON, Cheats Enabled for Admin Engine, Speedhack Protection ON
     sed -i 's/allow-list=true/allow-list=false/g' server.properties
     sed -i 's/white-list=true/white-list=false/g' server.properties
     sed -i 's/allow-cheats=false/allow-cheats=true/g' server.properties
@@ -84,12 +84,11 @@ Claim karne ke baad bot ko 'done' likhkar bhejein."
     sed -i 's/texturepack-required=false/texturepack-required=true/g' server.properties
     sed -i 's/correct-player-movement=false/correct-player-movement=true/g' server.properties
 
-    # Start background screen sessions
+    # Start background processes
     screen -dmS playit-tunnel /usr/local/bin/playit-cli
-    screen -dmS mcpe bash -c "LD_LIBRARY_PATH=. ./bedrock_server"
     screen -dmS tg-bot python3 /root/tg_manager.py
 
-    send_tg "Minecraft Bedrock Server & Telegram Manager active! Full security rules enforced. Telegram par /help type karein."
+    send_tg "Setup complete! Server aur Auto-Merchant Engine launch ho chuka hai. /help likhein."
 ) &
 
 tail -f /dev/null

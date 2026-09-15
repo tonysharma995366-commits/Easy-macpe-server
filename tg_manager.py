@@ -12,8 +12,9 @@ BASE_DIR = "/root/mcpe-server"
 PROPERTIES_FILE = os.path.join(BASE_DIR, "server.properties")
 WORLDS_DIR = os.path.join(BASE_DIR, "worlds")
 CONFIG_FILE = os.path.join(BASE_DIR, "shop_config.json")
+BEHAVIOR_PACK_DIR = os.path.join(BASE_DIR, "behavior_packs", "auto_shop")
 
-# Default Merchant Catalog
+# Pre-configured default items: Food, seeds, building ON; Rare items OFF
 DEFAULT_SHOP = {
     "food": {
         "bread": {"enabled": True, "currency": "emerald", "price": 1, "count": 8},
@@ -40,21 +41,6 @@ DEFAULT_SHOP = {
         "netherite_ingot": {"enabled": False, "currency": "diamond", "price": 64, "count": 1}
     }
 }
-
-def load_shop_config():
-    if not os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE, "w") as f:
-            json.dump(DEFAULT_SHOP, f, indent=4)
-        return DEFAULT_SHOP
-    try:
-        with open(CONFIG_FILE, "r") as f:
-            return json.load(f)
-    except Exception:
-        return DEFAULT_SHOP
-
-def save_shop_config(config):
-    with open(CONFIG_FILE, "w") as f:
-        json.dump(config, f, indent=4)
 
 def send_message(text):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
@@ -86,9 +72,36 @@ def stop_server():
 
 def start_server():
     stop_server()
+    build_and_inject_behavior_pack()
     cmd = f'screen -dmS mcpe bash -c "cd {BASE_DIR} && LD_LIBRARY_PATH=. ./bedrock_server"'
     run_cmd(cmd)
     time.sleep(2)
+
+def load_shop_config():
+    if not os.path.exists(CONFIG_FILE):
+        with open(CONFIG_FILE, "w") as f:
+            json.dump(DEFAULT_SHOP, f, indent=4)
+        return DEFAULT_SHOP
+    try:
+        with open(CONFIG_FILE, "r") as f:
+            return json.load(f)
+    except Exception:
+        return DEFAULT_SHOP
+
+def save_shop_config(config):
+    with open(CONFIG_FILE, "w") as f:
+        json.dump(config, f, indent=4)
+    # Shop update hote hi Behavior Pack update ho jayega
+    build_and_inject_behavior_pack()
+
+def get_active_world():
+    if not os.path.exists(PROPERTIES_FILE):
+        return "Bedrock level"
+    with open(PROPERTIES_FILE, "r") as f:
+        for line in f:
+            if line.startswith("level-name="):
+                return line.split("=", 1)[1].strip()
+    return "Bedrock level"
 
 def update_property(key, value):
     if not os.path.exists(PROPERTIES_FILE):
@@ -107,6 +120,103 @@ def update_property(key, value):
         new_lines.append(f"{key}={value}\n")
     with open(PROPERTIES_FILE, "w") as f:
         f.writelines(new_lines)
+
+# Automatic Behavior Pack Engine jo Trades.json khud banata hai
+def build_and_inject_behavior_pack():
+    cfg = load_shop_config()
+    trades_list = []
+    
+    for category, items in cfg.items():
+        for item_name, data in items.items():
+            if data.get("enabled", False):
+                curr = data.get("currency", "emerald")
+                price = data.get("price", 1)
+                count = data.get("count", 1)
+                
+                curr_item = f"minecraft:{curr}" if not curr.startswith("minecraft:") else curr
+                trade_item = f"minecraft:{item_name}" if not item_name.startswith("minecraft:") else item_name
+                
+                # Agar price 64 se zyada hai (jaise 128 diamonds / 2 stacks)
+                wants = []
+                if price > 64:
+                    wants.append({"item": curr_item, "quantity": 64})
+                    wants.append({"item": curr_item, "quantity": min(64, price - 64)})
+                else:
+                    wants.append({"item": curr_item, "quantity": price})
+                    
+                trades_list.append({
+                    "wants": wants,
+                    "gives": [{"item": trade_item, "quantity": count}],
+                    "max_uses": 999999
+                })
+
+    os.makedirs(os.path.join(BEHAVIOR_PACK_DIR, "trading"), exist_ok=True)
+    os.makedirs(os.path.join(BEHAVIOR_PACK_DIR, "entities"), exist_ok=True)
+    
+    # 1. Manifest
+    manifest_data = {
+        "format_version": 2,
+        "header": {
+            "name": "Server Auto Shop Pack",
+            "description": "Auto generated trades for server merchant",
+            "uuid": "2c678a10-7212-429a-a82a-43187b41e991",
+            "version": [1, 0, 0],
+            "min_engine_version": [1, 20, 0]
+        },
+        "modules": [
+            {
+                "type": "data",
+                "uuid": "8f3192aa-812a-40a1-a123-8837194ab512",
+                "version": [1, 0, 0]
+            }
+        ]
+    }
+    with open(os.path.join(BEHAVIOR_PACK_DIR, "manifest.json"), "w") as f:
+        json.dump(manifest_data, f, indent=2)
+        
+    # 2. Trades JSON
+    trades_data = {"tiers": [{"trades": trades_list}]}
+    with open(os.path.join(BEHAVIOR_PACK_DIR, "trading", "economy_trades.json"), "w") as f:
+        json.dump(trades_data, f, indent=2)
+        
+    # 3. Entity definition override for Wandering Trader
+    entity_data = {
+        "format_version": "1.16.0",
+        "minecraft:entity": {
+            "description": {
+                "identifier": "minecraft:wandering_trader",
+                "is_spawnable": True,
+                "is_summonable": True,
+                "is_experimental": False
+            },
+            "component_groups": {},
+            "components": {
+                "minecraft:type_family": {"family": ["wandering_trader", "mob"]},
+                "minecraft:breathable": {"total_supply": 15, "suffocate_when_rescuing": False},
+                "minecraft:nameable": {},
+                "minecraft:health": {"value": 20, "max": 20},
+                "minecraft:economy_trade_table": {
+                    "display_name": "Server Merchant",
+                    "table": "trading/economy_trades.json",
+                    "new_screen": True
+                },
+                "minecraft:physics": {},
+                "minecraft:pushable": {"is_pushable": False}
+            }
+        }
+    }
+    with open(os.path.join(BEHAVIOR_PACK_DIR, "entities", "wandering_trader.json"), "w") as f:
+        json.dump(entity_data, f, indent=2)
+
+    # 4. Link into active world
+    world_name = get_active_world()
+    world_path = os.path.join(WORLDS_DIR, world_name)
+    os.makedirs(world_path, exist_ok=True)
+    world_pack_file = os.path.join(world_path, "world_behavior_packs.json")
+    
+    pack_entry = [{"pack_id": "2c678a10-7212-429a-a82a-43187b41e991", "version": [1, 0, 0]}]
+    with open(world_pack_file, "w") as f:
+        json.dump(pack_entry, f, indent=2)
 
 def handle_document(doc):
     file_name = doc.get("file_name", "world.zip")
@@ -138,51 +248,39 @@ def handle_document(doc):
     start_server()
     send_message(f"World successfully import ho gayi!\nLevel Name: {world_folder_name}\nServer restarted.")
 
-HELP_TEXT = """Minecraft Server Full Control Panel
+HELP_TEXT = """Minecraft Auto-Shop & Server Control Panel
+
+Custom Merchant:
+/spawnmerchant <player> - Pre-programmed Merchant spawn karein
+/shop - Active items & price list
+/shopset <item> <on|off> - Item allow ya block karein
+/customprice <item> <currency> <amount> <count>
+   Example: /customprice elytra diamond 128 1
 
 World & Generation:
-/seed <number> - Generate new world with custom seed
-/backup - Download complete server & world backup zip
-[Send .zip/.mcworld] - Restore uploaded world file
+/seed <number> - New world with seed
+/backup - Full backup zip
+[Send .zip/.mcworld] - Upload custom world
 
-Security & Protection:
-/propertyprotection <on|off> - Turn Anti-Griefing (no block breaks) ON/OFF
-/chestlock <on|off> - Toggle chest & container protection
-/antixray <on|off> - Force server texture enforcement
+Security & Rules:
+/propertyprotection <on|off> - Anti-Griefing toggle
+/chestlock <on|off> - Chest protection toggle
+/antixray <on|off> - Force server texturepack
+/coords - Coordinates ON
+/keepinventory - KeepInventory ON
 
-Custom Merchant Control:
-/spawnmerchant <player> - Player ke paas Merchant NPC spawn karein
-/shop - List all merchant categories & prices
-/shopset <item> <on|off> - Allow/Block item in shop
-/customprice <item> <currency> <amount> <count>
-   Example: /customprice elytra diamond 128 1 (2 stacks diamond)
-/processbuy <player> <item> - Secure trade transaction
-
-Game Rules & Gameplay:
-/coords - Turn ON coordinates
-/keepinventory - Keep inventory on death
-/pvp <on|off> - Toggle PVP
-/difficulty <peaceful|easy|normal|hard>
-/gamemode <survival|creative|adventure>
-/time <day|night|noon|midnight>
-/weather <clear|rain|thunder>
-
-Player & Server Admin:
-/status - Check Minecraft & Playit status
-/players - Online player list
-/logs - Show last 15 console log lines
+Player Admin:
 /op <player> / /deop <player>
 /kick <player> / /ban <player> / /unban <player>
-/fixtunnel - Restart Playit CLI
-/restart / /startserver / /stopserver
-/shell <cmd> - Run Linux terminal command
-/cmd <cmd> - Run raw in-game console command
+/fixtunnel - Restart Playit
+/restart / /status / /logs
+/cmd <cmd> / /shell <cmd>
 """
 
 def handle_updates():
     offset = 0
-    load_shop_config()
-    send_message("Minecraft Server Controller Active!\nType /help sabhi commands ke liye.")
+    start_server()
+    send_message("Minecraft Server & Pre-Programmed Shop Online!\nType /help sabhi commands ke liye.")
     
     while True:
         try:
@@ -211,51 +309,21 @@ def handle_updates():
                 if text in ["/start", "/help"]:
                     send_message(HELP_TEXT)
 
-                # Seed se naya world generate karna
-                elif text.startswith("/seed"):
+                # Pre-programmed Merchant Spawn
+                elif text.startswith("/spawnmerchant"):
                     parts = text.split(maxsplit=1)
-                    if len(parts) < 2:
-                        send_message("Seed specify karein! Example: /seed 987654321")
-                    else:
-                        seed_val = parts[1].strip()
-                        new_world = f"world_{int(time.time())}"
-                        send_message(f"Seed {seed_val} apply karke naya world generate kiya ja raha hai...")
-                        stop_server()
-                        update_property("level-seed", seed_val)
-                        update_property("level-name", new_world)
-                        start_server()
-                        send_message(f"Naya world ban gaya!\nWorld Name: {new_world}\nSeed: {seed_val}")
+                    target = parts[1].strip() if len(parts) > 1 else "@p"
+                    
+                    send_to_console(f'execute at {target} run summon wandering_trader ~ ~ ~ minecraft:entity_born "Server Merchant"')
+                    time.sleep(1)
+                    send_to_console('effect @e[name="Server Merchant"] slowness 999999 255 true')
+                    send_to_console('effect @e[name="Server Merchant"] resistance 999999 255 true')
+                    send_message(f"Pre-Programmed Merchant '{target}' ke paas spawn ho gaya!\nAb uspar seedha tap karein, custom trades ka menu khul jayega.")
 
-                # Anti-Grief / Property Guard
-                elif text.startswith("/propertyprotection "):
-                    mode = text.split(" ", 1)[1].strip().lower()
-                    if mode in ["on", "enable", "true"]:
-                        send_to_console("gamerule immutableworld true")
-                        send_message("Property Protection ENABLED! Players cannot break/place blocks.")
-                    else:
-                        send_to_console("gamerule immutableworld false")
-                        send_message("Property Protection DISABLED! Regular block interactions restored.")
-
-                # Chest Protection Mode
-                elif text.startswith("/chestlock "):
-                    mode = text.split(" ", 1)[1].strip().lower()
-                    if mode in ["on", "enable", "true"]:
-                        send_to_console("scoreboard objectives add chestprotect dummy")
-                        send_message("Chest Protection ENABLED! Containers protected.")
-                    else:
-                        send_message("Chest Protection DISABLED!")
-
-                # Force Texturepack Requirement (Anti-Xray)
-                elif text.startswith("/antixray "):
-                    mode = text.split(" ", 1)[1].strip().lower()
-                    val = "true" if mode in ["on", "enable", "true"] else "false"
-                    update_property("texturepack-required", val)
-                    send_message(f"Anti-Xray texture enforcement set to: {val}. Restart required.")
-
-                # Shop Management
+                # Shop Price & Stock Control
                 elif text == "/shop":
                     cfg = load_shop_config()
-                    out = "Merchant Trade Catalog:\n\n"
+                    out = "Active Merchant Trades:\n\n"
                     for cat, items in cfg.items():
                         out += f"[{cat.upper()}]\n"
                         for name, data_item in items.items():
@@ -279,9 +347,9 @@ def handle_updates():
                                 break
                         if found:
                             save_shop_config(cfg)
-                            send_message(f"'{item_name}' set to: {'ENABLED' if state else 'DISABLED'}")
+                            send_message(f"'{item_name}' set to: {'ENABLED' if state else 'DISABLED'}. Trades updated!")
                         else:
-                            send_message(f"Item '{item_name}' shop me nahi mila.")
+                            send_message(f"Item '{item_name}' shop catalog me nahi mila.")
 
                 elif text.startswith("/customprice "):
                     parts = text.split()
@@ -299,83 +367,59 @@ def handle_updates():
                         if not placed:
                             cfg["rare"][item_name] = {"enabled": True, "currency": curr, "price": price, "count": count}
                         save_shop_config(cfg)
-                        send_message(f"Updated {item_name}: {count}x costs {price} {curr}!")
+                        send_message(f"Custom Price Set: {count}x {item_name} = {price} {curr}!\nTrades automatically update ho gaye.")
 
-                elif text.startswith("/processbuy "):
-                    parts = text.split()
-                    if len(parts) >= 3:
-                        player, item_name = parts[1].strip(), parts[2].strip()
-                        cfg = load_shop_config()
-                        target = None
-                        for cat in cfg:
-                            if item_name in cfg[cat]:
-                                target = cfg[cat][item_name]
-                                break
-                        if target and target["enabled"]:
-                            c, p, amt = target["currency"], target["price"], target["count"]
-                            send_to_console(f'execute as "{player}"[hasitem={{item={c},quantity={p}..}}] run clear @s {c} 0 {p}')
-                            send_to_console(f'give "{player}" {item_name} {amt}')
-                            send_message(f"Trade complete: {amt}x {item_name} given to {player}.")
-                        else:
-                            send_message(f"Item '{item_name}' disabled ya unavailable hai.")
-
-                # Merchant Spawn at Player or World Center
-                elif text.startswith("/spawnmerchant"):
+                # World Seed Generation
+                elif text.startswith("/seed"):
                     parts = text.split(maxsplit=1)
-                    if len(parts) > 1:
-                        target_player = parts[1].strip()
-                        send_to_console(f'execute as "{target_player}" at @s run summon npc ~ ~ ~ "Server Merchant"')
-                        send_message(f"Merchant NPC successfully '{target_player}' ke exact coordinates par spawn ho gaya!")
+                    if len(parts) < 2:
+                        send_message("Seed number likhein! Example: /seed 987654321")
                     else:
-                        # Fallback to nearest player or world spawn center
-                        send_to_console('execute as @p at @s run summon npc ~ ~ ~ "Server Merchant"')
-                        send_message("Merchant NPC online player / spawn position par spawn ho gaya!\nAap kisi specific player ke paas bulane ke liye '/spawnmerchant <player_name>' bhi use kar sakte hain.")
+                        seed_val = parts[1].strip()
+                        new_world = f"world_{int(time.time())}"
+                        send_message(f"Seed {seed_val} apply karke naya world generate kiya ja raha hai...")
+                        stop_server()
+                        update_property("level-seed", seed_val)
+                        update_property("level-name", new_world)
+                        start_server()
+                        send_message(f"Naya world ban gaya!\nWorld Name: {new_world}\nSeed: {seed_val}")
+
+                # Anti-Grief / Property Guard
+                elif text.startswith("/propertyprotection "):
+                    mode = text.split(" ", 1)[1].strip().lower()
+                    if mode in ["on", "enable", "true"]:
+                        send_to_console("gamerule immutableworld true")
+                        send_message("Property Protection ENABLED! Players blocks nahi tod payenge.")
+                    else:
+                        send_to_console("gamerule immutableworld false")
+                        send_message("Property Protection DISABLED!")
+
+                # Chest Protection
+                elif text.startswith("/chestlock "):
+                    mode = text.split(" ", 1)[1].strip().lower()
+                    if mode in ["on", "enable", "true"]:
+                        send_to_console("scoreboard objectives add chestprotect dummy")
+                        send_message("Chest Protection ENABLED!")
+                    else:
+                        send_message("Chest Protection DISABLED!")
+
+                # Anti-Xray Texture Requirement
+                elif text.startswith("/antixray "):
+                    mode = text.split(" ", 1)[1].strip().lower()
+                    val = "true" if mode in ["on", "enable", "true"] else "false"
+                    update_property("texturepack-required", val)
+                    send_message(f"Anti-Xray force requirement set to: {val}.")
 
                 # Network Tunnel Fix
                 elif text == "/fixtunnel":
-                    send_message("Playit CLI ko force restart kiya ja raha hai...")
+                    send_message("Playit restart ho raha hai...")
                     run_cmd("pkill -9 playit-cli")
                     run_cmd("screen -S playit-tunnel -X quit")
                     time.sleep(1)
                     run_cmd("screen -dmS playit-tunnel /usr/local/bin/playit-cli")
-                    time.sleep(2)
-                    out = run_cmd("screen -ls").stdout
-                    status = "ONLINE" if "playit-tunnel" in out else "FAILED"
-                    send_message(f"Tunnel restart complete! Status: {status}")
+                    send_message("Playit Tunnel restart ho chuka hai!")
 
-                # Terminal Shell Execution
-                elif text.startswith("/shell "):
-                    sh_cmd = text.split(" ", 1)[1].strip()
-                    res = run_cmd(sh_cmd)
-                    out_text = res.stdout if res.stdout else res.stderr
-                    send_message(f"Shell Result:\n{out_text if out_text else 'Done.'}")
-
-                elif text == "/status":
-                    out = run_cmd("screen -ls").stdout
-                    status = "ONLINE" if "mcpe" in out else "OFFLINE"
-                    playit = "ONLINE" if "playit-tunnel" in out else "OFFLINE"
-                    send_message(f"Status:\nMinecraft: {status}\nPlayit: {playit}")
-
-                elif text == "/players":
-                    send_to_console("list")
-                    time.sleep(1)
-                    run_cmd("screen -S mcpe -X hardcopy /tmp/screen_log.txt")
-                    try:
-                        with open("/tmp/screen_log.txt", "r") as f:
-                            lines = f.readlines()
-                        send_message(f"Player List:\n{''.join(lines[-10:])}")
-                    except Exception:
-                        send_message("Player list check command sent.")
-
-                elif text == "/logs":
-                    run_cmd("screen -S mcpe -X hardcopy /tmp/screen_log.txt")
-                    try:
-                        with open("/tmp/screen_log.txt", "r") as f:
-                            lines = f.readlines()
-                        send_message(f"Recent Logs:\n{''.join(lines[-15:])}")
-                    except Exception as e:
-                        send_message(f"Logs error: {e}")
-
+                # Admin Controls
                 elif text.startswith("/op "):
                     player = text.split(" ", 1)[1].strip()
                     send_to_console(f'op "{player}"')
@@ -409,67 +453,32 @@ def handle_updates():
                     send_to_console("gamerule keepinventory true")
                     send_message("KeepInventory turned ON!")
 
-                elif text.startswith("/pvp "):
-                    val = text.split(" ", 1)[1].strip().lower()
-                    pvp_val = "true" if val in ["on", "true", "1"] else "false"
-                    send_to_console(f"gamerule pvp {pvp_val}")
-                    update_property("pvp", pvp_val)
-                    send_message(f"PVP set to: {pvp_val}")
-
-                elif text.startswith("/difficulty "):
-                    diff = text.split(" ", 1)[1].strip().lower()
-                    if diff in ["peaceful", "easy", "normal", "hard"]:
-                        send_to_console(f"difficulty {diff}")
-                        update_property("difficulty", diff)
-                        send_message(f"Difficulty set to: {diff}")
-
-                elif text.startswith("/gamemode "):
-                    gm = text.split(" ", 1)[1].strip().lower()
-                    if gm in ["survival", "creative", "adventure"]:
-                        send_to_console(f"defaultgamemode {gm}")
-                        update_property("gamemode", gm)
-                        send_message(f"Gamemode set to: {gm}")
-
-                elif text.startswith("/time "):
-                    t_val = text.split(" ", 1)[1].strip().lower()
-                    send_to_console(f"time set {t_val}")
-                    send_message(f"Time set to: {t_val}")
-
-                elif text.startswith("/weather "):
-                    w_val = text.split(" ", 1)[1].strip().lower()
-                    send_to_console(f"weather {w_val}")
-                    send_message(f"Weather set to: {w_val}")
-
-                elif text.startswith("/say "):
-                    msg_say = text.split(" ", 1)[1].strip()
-                    send_to_console(f'say [ADMIN]: {msg_say}')
-                    send_message(f"Broadcast sent: {msg_say}")
-
-                elif text.startswith("/cmd "):
-                    mc_cmd = text.split(" ", 1)[1].strip()
-                    send_to_console(mc_cmd)
-                    send_message(f"Command sent: {mc_cmd}")
+                elif text == "/status":
+                    out = run_cmd("screen -ls").stdout
+                    status = "ONLINE" if "mcpe" in out else "OFFLINE"
+                    playit = "ONLINE" if "playit-tunnel" in out else "OFFLINE"
+                    send_message(f"Status:\nMinecraft: {status}\nPlayit: {playit}")
 
                 elif text == "/backup":
-                    send_message("Server backup create ho raha hai...")
+                    send_message("Full backup banaya ja raha hai...")
                     backup_zip = os.path.join(BASE_DIR, "world_backup.zip")
                     if os.path.exists(backup_zip):
                         os.remove(backup_zip)
-                    run_cmd(f"cd {BASE_DIR} && zip -r {backup_zip} worlds/ server.properties shop_config.json")
-                    send_document(backup_zip, "Minecraft Full Backup")
+                    run_cmd(f"cd {BASE_DIR} && zip -r {backup_zip} worlds/ server.properties shop_config.json behavior_packs/")
+                    send_document(backup_zip, "Minecraft Server Backup")
+
+                elif text.startswith("/shell "):
+                    res = run_cmd(text.split(" ", 1)[1].strip())
+                    send_message(f"Output:\n{res.stdout or res.stderr or 'Done'}")
+
+                elif text.startswith("/cmd "):
+                    send_to_console(text.split(" ", 1)[1].strip())
+                    send_message("Command executed!")
 
                 elif text == "/restart":
-                    send_message("Restarting server...")
+                    send_message("Server restart ho raha hai...")
                     start_server()
                     send_message("Server restarted.")
-
-                elif text == "/stopserver":
-                    stop_server()
-                    send_message("Server stopped.")
-
-                elif text == "/startserver":
-                    start_server()
-                    send_message("Server started.")
 
         except Exception:
             time.sleep(2)
